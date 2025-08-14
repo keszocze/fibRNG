@@ -1,0 +1,12 @@
+cradle:
+  cabal:
+    - path: "./src"
+      component: "lib:fib-rng-clash"
+    - path: "./tests/doctests.hs"
+      component: "fib-rng-clash:doctests"
+    - path: "./tests"
+      component: "fib-rng-clash:test-library"
+    - path: "./bin/Clashi.hs"
+      component: "fib-rng-clash:exe:clashi"
+    - path: "./bin/Clash.hs"
+      component: "fib-rng-clash:exe:clash"
