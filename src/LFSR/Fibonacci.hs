@@ -1,166 +1,202 @@
+{-# LANGUAGE ViewPatterns #-}
+
 module LFSR.Fibonacci where
 
 import Clash.Prelude
+import Control.Monad.Extra
 import qualified Control.Monad.Trans.State.Strict as S
 import Debug.Trace
 import LFSR
-import LFSR.Fibonacci.TH
+import LFSR.Fibonacci.MaxLenTaps
 
 type Taps n = Vec n Bit
 
-fibLFSR' :: (KnownNat n) => Taps (n + 1) -> LFSR (n + 1) -> LFSR (n + 1)
-fibLFSR' taps reg = reg'
+fibonacciLFSR :: (KnownNat n, n ~ k + 1) => Taps n -> LFSR n -> LFSR n
+fibonacciLFSR taps reg = reg'
   where
     selection = zipWith (.&.) reg taps
     newBit = fold xor selection
     reg' = newBit +>> reg
 
-fibLFSR :: (HiddenClockResetEnable dom, KnownNat n) => Taps (n + 1) -> LFSR (n + 1) -> Signal dom (LFSR (n + 1))
-fibLFSR taps i = reg
-  where
-    reg = register i (fmap (fibLFSR' taps) reg)
 
-fibLFSRGen' :: Taps (n + 1) -> LFSR (n + 1) -> Bit
-fibLFSRGen' taps reg = newBit
-  where
-    selection = zipWith (.&.) reg taps
-    newBit = fold xor selection
 
-fibLFSRGen :: (HiddenClockResetEnable dom, KnownNat n) => Taps (n + 1) -> LFSR (n + 1) -> Signal dom (LFSR (n + 1))
-fibLFSRGen taps = lfsr (fibLFSRGen' taps)
+data FibMode = Stopped | Running | Explicit deriving (Eq, Show, Generic, NFDataX)
 
-{-
-Adressen für die LSFR Werte
-0000
-0001
-0010
-0011
-
-Adressen für die Taps Werte
-0100
-0101
-0110
-0111
-
-Adresse für die Konfiguration
-1111
--}
-
--- fibThingie ::
---   (KnownNat nWords, KnownNat wordSize, KnownNat addrWidth) =>
---   BitVector wordSize ->
---   BitVector addrWidth ->
---   Maybe (BitVector wordSize) ->
--- (BitVector wordSize, BitVector wordSize)
-
-{-
-Muss zwischen drei Dingen unterscheiden:
-Interface width/ "adress"
-
--}
-
--- -- TODO nWordsExp -> addrWidth!
--- getSubWord :: forall wordSize wordIdxWidth. (KnownNat wordSize, KnownNat wordIdxWidth) => FibState' (wordSize * addrWidth)-> BitVector addrWidth -> BitVector wordSize
--- getSubWord (FibState' { reg, taps }) addr = extractWord from wordIdx
---   where
---     from = if testBit addr (natToNum @addrWidth) then taps else reg
---     wordIdx = undefined -- TODO this isnt correct any more: resize addr :: BitVector addrWidth
---     extractWord = undefined
-
-data FibMode = Stopped | Running | Stepwise deriving (Show, Generic, NFDataX)
-
-data FibState' w = FibState'
-  { reg :: LFSR w,
-    taps :: Taps w,
+data FS nWords wordSize = FS
+  { reg :: Vec nWords (BitVector wordSize),
+    taps :: Vec nWords (BitVector wordSize),
     mode :: FibMode
   }
-  deriving (Show, Generic, NFDataX)
+  deriving (Generic, NFDataX)
 
--- TODO herausfinden, ob es einen expliziten read request gibt, ob die adresse immer anliegt und ich dann steps über einen write realisieren muss
-
-type FibState wordSize nWords a = S.State (FibState' (wordSize * nWords)) a
+instance (KnownNat n, KnownNat w) => Show (FS n w) where
+  show :: (KnownNat n, KnownNat w) => FS n w -> String
+  show (FS {reg, taps, mode}) = "FS\n" <> "\tlfsr: " <> show (v2bv $ bitCoerce reg) <> "\n\ttaps: " <> show (v2bv $ bitCoerce taps) <> "\n\tmode: " <> show mode
 
 data AddressType = LFSR | Taps deriving (Eq, Show, Generic, NFDataX)
 
-data Address n = Address AddressType (Unsigned n) deriving (Show, Generic, NFDataX)
+data Address nWords = Address AddressType (Index nWords) deriving (Show, Generic, NFDataX)
 
 -- Address ist ein unnötiges Level an Indirektion?
-data FibCmd wordSize addrWidth = Read (Address addrWidth) | Write (Address addrWidth) (BitVector wordSize)
+data FibCmd nWords wordSize = Read (Address nWords) | Write (Address nWords) (BitVector wordSize) | SetMode FibMode | Advance | NOP
   deriving (Show, Generic, NFDataX)
 
-readVec :: AddressType -> FibState' w -> Vec w Bit
+readVec :: AddressType -> FS nWords wordSize -> Vec nWords (BitVector wordSize)
 readVec addrType s = if addrType == LFSR then reg s else taps s
 
-a = (1 :: Bit) :> 0 :> 1 :> 1 :> 0 :> 0 :> 0 :> 1 :> Nil
-
-readWord ::
-  forall wordSize addrWidth w.
-  ( KnownNat wordSize,
-    KnownNat addrWidth,
-    KnownNat w,
-    CmpNat (w + 1) wordSize ~ GT
-  ) =>
-  Address addrWidth ->
-  FibState' w ->
-  BitVector wordSize
-readWord (Address addrType addr) s = word
+readWord :: (KnownNat nWords, KnownNat wordSize) => Address nWords -> FS nWords wordSize -> BitVector wordSize
+readWord (Address addrType addr) fs = vec !! addr
   where
-    vec = readVec addrType s
-    word = readWord' addr vec
-    -- readWord ::
-    --   forall wordSize addrWidth w.
-    --   ( KnownNat wordSize,
-    --     KnownNat addrWidth,
-    --     KnownNat w,
-    --     CmpNat (w + 1) wordSize ~ GT
-    --   ) =>
-    --   Unsigned addrWidth ->
-    --   Vec w Bit ->
-    --   BitVector wordSize
-    readWord' addr v = bitCoerce wrd
-      where
-        wordAsUnsigned = natToNum @wordSize @(Unsigned wordSize)
-        rotateDist = mul addr wordAsUnsigned
-        v' = rotateLeft v rotateDist
-        wrd = withSNat @wordSize (\n -> select d0 d1 n v')
+    vec = readVec addrType fs
 
+setMode :: FibMode -> FS nWords wordSize -> FS nWords wordSize
+setMode mode fs = fs {mode = mode}
 
-writeWord :: forall wordSize addrWidth w.
-  (KnownNat wordSize, KnownNat addrWidth, KnownNat w)
-  => Address addrWidth -> BitVector wordSize -> FibState' w -> FibState' w
-writeWord = undefined
+writeWord :: (KnownNat nWords, KnownNat wordSize) => Address nWords -> BitVector wordSize -> FS nWords wordSize -> FS nWords wordSize
+writeWord (Address addrType addr) word fs = case addrType of
+  LFSR -> fs {reg = vec'}
+  Taps -> fs {taps = vec'}
+  where
+    vec = readVec addrType fs
+    vec' = replace addr word vec
 
-getVector :: (Monad m) => AddressType -> S.StateT (FibState' w) m (LFSR w)
-getVector LFSR = S.gets reg
-getVector Taps = S.gets taps
-
-fibThingie ::
-  forall wordSize addrWidth nWords.
-  ( KnownNat wordSize,
-    KnownNat addrWidth,
-    KnownNat nWords,
-    nWords ~ 2 ^ addrWidth,
-    CmpNat (wordSize * nWords + 1) wordSize ~ GT
+advanceLFSR ::
+  forall nWords wordSize k.
+  ( KnownNat nWords,
+    KnownNat wordSize,
+    KnownNat k,
+    nWords * wordSize ~ k + 1
   ) =>
-  FibCmd wordSize addrWidth ->
-  FibState wordSize nWords (BitVector wordSize)
-fibThingie (Read (Address addrType addr)) = do
-  vec <- getVector addrType
-  -- put the desired bits at the correct position
-  let v = rotateLeft vec addr -- mit der Wortbreite rotieren?
-      w = withSNat @wordSize (\n -> select d0 d1 n v)
-  return $ bitCoerce w
-fibThingie (Write add val) = do
-  return 0
+  FS nWords wordSize ->
+  FS nWords wordSize
+advanceLFSR fs@FS {reg, taps} = fs {reg = bitCoerce reg'}
+  where
+    reg' = fibonacciLFSR tapsFlat regFlat
+    -- regFlat :: Vec (n * w) Bit
+    regFlat = bitCoerce reg
+    -- tapsFlat :: Vec (n * w) Bit
+    tapsFlat = bitCoerce taps
 
+initState :: FS 2 4
 initState =
-  FibState'
-    { reg = repeat 1 :: LFSR 8,
-      taps = $(listToVecTH $ genList 8 [8, 6, 5, 4]),
-      mode = Running
+  FS
+    { reg = bitCoerce (repeat 1 :: LFSR 8),
+      taps = bitCoerce $(listToVecTH $ getMaxLenTaps 8),
+      mode = Stopped
     }
 
-ml :: (HiddenClockResetEnable System) => Signal System (FibCmd 4 1) -> Signal System (BitVector 4)
-ml = mealyS (fibThingie @4 @1) initState
+executeFibonacciLFSRS ::
+  forall nWords wordSize k.
+  ( KnownNat nWords,
+    KnownNat wordSize,
+    KnownNat k,
+    nWords * wordSize ~ k + 1
+  ) =>
+  FibCmd nWords wordSize ->
+  S.State (FS nWords wordSize) (BitVector wordSize)
+executeFibonacciLFSRS (Read addr) = do
+  word <- S.gets $ readWord addr
+  advance False
+  return word
 
--- getVector :: forall wordSize nWords. (KnownNat wordSize, KnownNat nWords) => AddressType -> FibState wordSize nWords (Vec (wordSize * nWords) Bit)
+executeFibonacciLFSRS (Write addr word) = do
+  advance  False
+  S.modify' (writeWord addr word)
+  return 0
+
+-- Setting a mode is immediately respected by advance
+executeFibonacciLFSRS (SetMode mode) = do
+  S.modify' $ \fs -> setMode mode fs
+  advance  False
+  return 0
+
+executeFibonacciLFSRS Advance = advance  True >> return 0
+
+executeFibonacciLFSRS NOP = advance  False >> return 0
+
+advance :: (KnownNat nWords, KnownNat wordSize, KnownNat k, nWords * wordSize ~ (k + 1)) => Bool -> S.State (FS nWords wordSize) ()
+advance isAdvanceCmd = do
+  mode' <- S.gets mode
+  let shouldAdvance = (mode' == Running) || isAdvanceCmd
+  when shouldAdvance (S.modify' advanceLFSR)
+
+
+
+-- | The domain for the TTQV competition tapeout. It differs from the default `System` domain by having an active low reset.
+createDomain vSystem {vName = "TTQV", vResetPolarity = ActiveLow}
+
+
+-- TODO viel simplere Modulstruktur machen
+
+
+{-# ANN ttWrapper
+  (Synthesize
+    { t_name = "fibRNG"
+    , t_inputs = [ PortName "clk"
+                  , PortName "rst_n"
+                  , PortName "ui_in"
+                  , PortName "address"
+                  , PortName "data_write"
+                  , PortName "data_in"
+                  ]
+    , t_output =  PortProduct "" [ PortName "uo_out"
+                  , PortName "data_out"
+      ]
+    }) #-}
+ttWrapper ::
+  Clock TTQV ->
+  Reset TTQV ->
+  Signal TTQV (BitVector 8) ->
+  Signal TTQV (BitVector 4) ->
+  Signal TTQV Bit ->
+  Signal TTQV (BitVector 8) ->
+  Signal TTQV (BitVector 8, BitVector 8)
+ttWrapper clk rst _ui_in address data_write data_in = bundle (uo_out, design cmd)
+  where
+    -- we do not make use of the pmod
+    uo_out :: Signal TTQV (BitVector 8)
+    uo_out = pure 0b00000000
+    design :: Signal TTQV (FibCmd 4 8) -> Signal TTQV (BitVector 8)
+    design = exposeClockResetEnable (mealyS @TTQV executeFibonacciLFSRS initStateTTQV) clk rst enableGen
+    cmd :: Signal TTQV (FibCmd 4 8)
+    cmd = liftA3 parseTTQVInput address data_write data_in
+
+
+initStateTTQV :: FS 4 8
+initStateTTQV =  FS
+  { reg = bitCoerce (repeat 1 :: LFSR 32),
+    taps = bitCoerce $(listToVecTH $ getMaxLenTaps 32),
+    mode = Stopped
+  }
+
+ttqvm :: Clock TTQV -> Reset TTQV -> Signal TTQV (FibCmd 4 8) -> Signal TTQV (BitVector 8)
+ttqvm clk rst = exposeClockResetEnable (mealyS @TTQV executeFibonacciLFSRS initStateTTQV) clk rst enableGen
+
+
+parseTTQVInput :: BitVector 4 -> Bit -> BitVector 8 -> FibCmd 4 8
+parseTTQVInput address data_write data_in =
+  if data_write == 1
+    then parseWriteCmd address data_in
+    else parseReadAddress address
+
+parseReadAddress :: BitVector 4 -> FibCmd 4 8
+parseReadAddress $(bitPattern ".1aa") = Read (Address Taps (bitCoerce aa))
+parseReadAddress $(bitPattern ".0aa") = Read (Address LFSR (bitCoerce aa))
+parseReadAddress _ = NOP
+
+parseWriteCmd :: BitVector 4 -> BitVector 8 -> FibCmd 4 8
+parseWriteCmd $(bitPattern "01aa") val = Write (Address Taps (bitCoerce aa)) val
+parseWriteCmd $(bitPattern "00aa") val = Write (Address LFSR (bitCoerce aa)) val
+parseWriteCmd $(bitPattern "1...") val = case val of
+  0b00000000 -> SetMode Stopped
+  0b00000001 -> SetMode Running
+  0b00000010 -> SetMode Explicit
+  0b00000011 -> Advance
+  _otherwise -> NOP
+
+
+
+a :: Vec 8 Bit
+a = (1 :: Bit) :> 0 :> 1 :> 1 :> 0 :> 0 :> 0 :> 1 :> Nil
+
+-- TODO diesen TH Krams in Datei MaxCycleTaps packen (das ist alles so unsäglich dämlich)
