@@ -38,7 +38,7 @@ data AddressType = LFSR | Taps deriving (Eq, Show, Generic, NFDataX)
 data Address nWords = Address AddressType (Index nWords) deriving (Show, Generic, NFDataX)
 
 -- Address ist ein unnötiges Level an Indirektion?
-data FibCmd nWords wordSize = Read (Address nWords) | Write (Address nWords) (BitVector wordSize) | SetMode FibMode | Advance | NOP
+data FibCmd nWords wordSize = Read (Address nWords) | Write (Address nWords) (BitVector wordSize) | SetMode FibMode | Advance | ReadMode | NOP
   deriving (Show, Generic, NFDataX)
 
 readVec :: AddressType -> FS nWords wordSize -> Vec nWords (BitVector wordSize)
@@ -110,14 +110,26 @@ executeFibonacciLFSRS (SetMode mode) = do
   advance  False
   return 0
 
-executeFibonacciLFSRS Advance = advance  True >> return 0
+executeFibonacciLFSRS ReadMode = do
+  advance False
+  m <- S.gets mode
+  return $ bitify m
+    where
+      bitify :: FibMode -> BitVector wordSize
+      bitify Stopped = 0b00000000
+      bitify Running = 0b00000001
+      bitify Explicit = 0b00000010
 
-executeFibonacciLFSRS NOP = advance  False >> return 0
+
+
+executeFibonacciLFSRS Advance = advance True >> return 0
+
+executeFibonacciLFSRS NOP = advance False >> return 0
 
 advance :: (KnownNat nWords, KnownNat wordSize, KnownNat k, nWords * wordSize ~ (k + 1)) => Bool -> S.State (FS nWords wordSize) ()
 advance isAdvanceCmd = do
   mode' <- S.gets mode
-  let shouldAdvance = (mode' == Running) || isAdvanceCmd
+  let shouldAdvance = (mode' == Running) || (isAdvanceCmd && mode' /= Stopped)
   when shouldAdvance (S.modify' advanceLFSR)
 
 
@@ -180,8 +192,9 @@ parseTTQVInput address data_write data_in =
     else parseReadAddress address
 
 parseReadAddress :: BitVector 4 -> FibCmd 4 8
-parseReadAddress $(bitPattern ".1aa") = Read (Address Taps (bitCoerce aa))
-parseReadAddress $(bitPattern ".0aa") = Read (Address LFSR (bitCoerce aa))
+parseReadAddress $(bitPattern "01aa") = Read (Address Taps (bitCoerce aa))
+parseReadAddress $(bitPattern "00aa") = Read (Address LFSR (bitCoerce aa))
+parseReadAddress 0b1111 = ReadMode
 parseReadAddress _ = NOP
 
 parseWriteCmd :: BitVector 4 -> BitVector 8 -> FibCmd 4 8
@@ -195,8 +208,3 @@ parseWriteCmd $(bitPattern "1...") val = case val of
   _otherwise -> NOP
 
 
-
-a :: Vec 8 Bit
-a = (1 :: Bit) :> 0 :> 1 :> 1 :> 0 :> 0 :> 0 :> 1 :> Nil
-
--- TODO diesen TH Krams in Datei MaxCycleTaps packen (das ist alles so unsäglich dämlich)
