@@ -89,10 +89,9 @@ library
   import: common-options
   hs-source-dirs: src
   exposed-modules:
-    Example.Project
     LFSR
     LFSR.Fibonacci
-    LFSR.Fibonacci.MaxLenTaps
+    LFSR.Fibonacci.Taps
   default-language: Haskell2010
 
 -- Builds the executable 'clash', with fib-rng-clash project in scope
@@ -130,7 +129,6 @@ test-suite test-library
   ghc-options: -threaded
   main-is: unittests.hs
   other-modules:
-    Tests.Example.Project
     Tests.LFSR.Fibonacci
   build-depends:
     fib-rng-clash,

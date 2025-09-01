@@ -1,4 +1,4 @@
-module LFSR.Fibonacci.MaxLenTaps where
+module LFSR.Fibonacci.Taps where
 
 import Clash.Prelude (Bit)
 import Prelude
@@ -19,7 +19,10 @@ genList len taps = helper len taps []
 getMaxLenTaps :: Int -> [Bit]
 getMaxLenTaps n = genList n (maxLenTaps ! n)
 
--- Taken from Xilinx
+-- Taken from Xilinx Application Note
+-- P. Alfke, “Efficient Shift Registers, LFSR Counters, and Long Pseudo-Random Sequence Generators,” Xilinx,
+-- Application Note XAPP 052, July 1996. [Online]. Available: http://www.xilinx.com/support/documentation/application_notes/xapp052.pdf
+
 maxLenTaps :: IntMap [Int]
 maxLenTaps =
   fromList

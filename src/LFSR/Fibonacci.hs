@@ -7,7 +7,7 @@ import Control.Monad.Extra
 import qualified Control.Monad.Trans.State.Strict as S
 import Debug.Trace
 import LFSR
-import LFSR.Fibonacci.MaxLenTaps
+import LFSR.Fibonacci.Taps
 
 type Taps n = Vec n Bit
 
