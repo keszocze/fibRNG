@@ -1,23 +1,27 @@
 {-# LANGUAGE ViewPatterns #-}
 
-module LFSR.Fibonacci where
+module Fibonacci where
 
 import Clash.Prelude
 import Control.Monad.Extra
 import qualified Control.Monad.Trans.State.Strict as S
-import Debug.Trace
-import LFSR
-import LFSR.Fibonacci.Taps
+import Fibonacci.Taps
 
 type Taps n = Vec n Bit
+type FibReg n = Vec n Bit
 
-fibonacciLFSR :: (KnownNat n, n ~ k + 1) => Taps n -> LFSR n -> LFSR n
+fibonacciLFSR :: (KnownNat n, n ~ k + 1) => Taps n -> FibReg n -> FibReg n
 fibonacciLFSR taps reg = reg'
   where
     selection = zipWith (.&.) reg taps
     newBit = fold xor selection
     reg' = newBit +>> reg
 
+
+fibonacciLFSR' :: (HiddenClockResetEnable dom, KnownNat n, n ~ k + 1) => Taps n -> FibReg n -> Signal dom (FibReg n)
+fibonacciLFSR' taps i = reg
+  where
+    reg = register i (fmap (fibonacciLFSR taps) reg)
 
 
 data FibMode = Stopped | Running | Explicit deriving (Eq, Show, Generic, NFDataX)
@@ -33,7 +37,7 @@ instance (KnownNat n, KnownNat w) => Show (FS n w) where
   show :: (KnownNat n, KnownNat w) => FS n w -> String
   show (FS {reg, taps, mode}) = "FS\n" <> "\tlfsr: " <> show (v2bv $ bitCoerce reg) <> "\n\ttaps: " <> show (v2bv $ bitCoerce taps) <> "\n\tmode: " <> show mode
 
-data AddressType = LFSR | Taps deriving (Eq, Show, Generic, NFDataX)
+data AddressType = FibReg | Taps deriving (Eq, Show, Generic, NFDataX)
 
 data Address nWords = Address AddressType (Index nWords) deriving (Show, Generic, NFDataX)
 
@@ -42,7 +46,7 @@ data FibCmd nWords wordSize = Read (Address nWords) | Write (Address nWords) (Bi
   deriving (Show, Generic, NFDataX)
 
 readVec :: AddressType -> FS nWords wordSize -> Vec nWords (BitVector wordSize)
-readVec addrType s = if addrType == LFSR then reg s else taps s
+readVec addrType s = if addrType == FibReg then reg s else taps s
 
 readWord :: (KnownNat nWords, KnownNat wordSize) => Address nWords -> FS nWords wordSize -> BitVector wordSize
 readWord (Address addrType addr) fs = vec !! addr
@@ -54,7 +58,7 @@ setMode mode fs = fs {mode = mode}
 
 writeWord :: (KnownNat nWords, KnownNat wordSize) => Address nWords -> BitVector wordSize -> FS nWords wordSize -> FS nWords wordSize
 writeWord (Address addrType addr) word fs = case addrType of
-  LFSR -> fs {reg = vec'}
+  FibReg -> fs {reg = vec'}
   Taps -> fs {taps = vec'}
   where
     vec = readVec addrType fs
@@ -80,7 +84,7 @@ advanceLFSR fs@FS {reg, taps} = fs {reg = bitCoerce reg'}
 initState :: FS 2 4
 initState =
   FS
-    { reg = bitCoerce (repeat 1 :: LFSR 8),
+    { reg = bitCoerce (repeat 1 :: FibReg 8),
       taps = bitCoerce $(listToVecTH $ getMaxLenTaps 8),
       mode = Stopped
     }
@@ -119,7 +123,6 @@ executeFibonacciLFSRS ReadMode = do
       bitify Stopped = 0b00000000
       bitify Running = 0b00000001
       bitify Explicit = 0b00000010
-
 
 
 executeFibonacciLFSRS Advance = advance True >> return 0
@@ -176,7 +179,7 @@ ttWrapper clk rst _ui_in address data_write data_in = bundle (uo_out, design cmd
 
 initStateTTQV :: FS 4 8
 initStateTTQV =  FS
-  { reg = bitCoerce (repeat 1 :: LFSR 32),
+  { reg = bitCoerce (repeat 1 :: FibReg 32),
     taps = bitCoerce $(listToVecTH $ getMaxLenTaps 32),
     mode = Stopped
   }
@@ -193,13 +196,13 @@ parseTTQVInput address data_write data_in =
 
 parseReadAddress :: BitVector 4 -> FibCmd 4 8
 parseReadAddress $(bitPattern "01aa") = Read (Address Taps (bitCoerce aa))
-parseReadAddress $(bitPattern "00aa") = Read (Address LFSR (bitCoerce aa))
+parseReadAddress $(bitPattern "00aa") = Read (Address FibReg (bitCoerce aa))
 parseReadAddress 0b1111 = ReadMode
 parseReadAddress _ = NOP
 
 parseWriteCmd :: BitVector 4 -> BitVector 8 -> FibCmd 4 8
 parseWriteCmd $(bitPattern "01aa") val = Write (Address Taps (bitCoerce aa)) val
-parseWriteCmd $(bitPattern "00aa") val = Write (Address LFSR (bitCoerce aa)) val
+parseWriteCmd $(bitPattern "00aa") val = Write (Address FibReg (bitCoerce aa)) val
 parseWriteCmd $(bitPattern "1...") val = case val of
   0b00000000 -> SetMode Stopped
   0b00000001 -> SetMode Running

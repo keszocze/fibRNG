@@ -2,12 +2,8 @@ import Prelude
 
 import Test.Tasty
 
-import qualified Tests.Example.Project
-import qualified Tests.LFSR.Fibonacci
+import qualified Tests.Fibonacci
 
 main :: IO ()
-main = defaultMain $ testGroup "."
-  [
-    Tests.Example.Project.accumTests,
-    Tests.LFSR.Fibonacci.fibRNGTests
-  ]
+main = defaultMain Tests.Fibonacci.fibRNGTests
+

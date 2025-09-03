@@ -1,4 +1,4 @@
-module LFSR.Fibonacci.Taps where
+module Fibonacci.Taps where
 
 import Clash.Prelude (Bit)
 import Prelude
